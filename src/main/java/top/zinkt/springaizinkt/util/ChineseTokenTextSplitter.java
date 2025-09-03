@@ -53,51 +53,94 @@ public class ChineseTokenTextSplitter extends TextSplitter {
     }
 
     protected List<String> doSplit(String text, int chunkSize) {
-        if (text != null && !text.trim().isEmpty()) {
-            List<Integer> tokens = this.getEncodedTokens(text);
-            List<String> chunks = new ArrayList();
-            int num_chunks = 0;
-
-            while(!tokens.isEmpty() && num_chunks < this.maxNumChunks) {
-                List<Integer> chunk = tokens.subList(0, Math.min(chunkSize, tokens.size()));
-                String chunkText = this.decodeTokens(chunk);
-                if (chunkText.trim().isEmpty()) {
-                    tokens = tokens.subList(chunk.size(), tokens.size());
-                } else {
-                    int lastPunctuation = Math.max(chunkText.lastIndexOf('。'), // 英文句号和中文句号
-                            Math.max(
-                                    Math.max(chunkText.lastIndexOf('?'), chunkText.lastIndexOf('？')), // 英文问号和中文问号
-                                    Math.max(
-                                            Math.max(chunkText.lastIndexOf('!'), chunkText.lastIndexOf('！')), // 英文感叹号和中文感叹号
-                                            chunkText.lastIndexOf('\n') // 换行符
-                                    )
-                            )
-                    );
-                    if (lastPunctuation != -1 && lastPunctuation > this.minChunkSizeChars) {
-                        chunkText = chunkText.substring(0, lastPunctuation + 1);
-                    }
-
-                    String chunkTextToAppend = this.keepSeparator ? chunkText.trim() : chunkText.replace(System.lineSeparator(), " ").trim();
-                    if (chunkTextToAppend.length() > this.minChunkLengthToEmbed) {
-                        chunks.add(chunkTextToAppend);
-                    }
-
-                    tokens = tokens.subList(this.getEncodedTokens(chunkText).size(), tokens.size());
-                    ++num_chunks;
-                }
-            }
-
-            if (!tokens.isEmpty()) {
-                String remaining_text = this.decodeTokens(tokens).replace(System.lineSeparator(), " ").trim();
-                if (remaining_text.length() > this.minChunkLengthToEmbed) {
-                    chunks.add(remaining_text);
-                }
-            }
-
-            return chunks;
-        } else {
-            return new ArrayList();
+        if (text == null || text.trim().isEmpty()) {
+            return new ArrayList<>();
         }
+
+        List<Integer> tokens = this.getEncodedTokens(text);
+        List<String> chunks = new ArrayList<>();
+        int num_chunks = 0;
+
+        while (!tokens.isEmpty() && num_chunks < this.maxNumChunks) {
+            // 先对整个剩余文本查找第一个连续两个换行符（优先级最高）
+            String remainingText = this.decodeTokens(tokens);
+            int firstDoubleNewline = remainingText.indexOf("\n\n");
+
+            if (firstDoubleNewline != -1) {
+                // 在第一个 "\n\n" 处切分（包含这两个换行符）
+                int splitPos = firstDoubleNewline + 2;
+                String chunkRaw = remainingText.substring(0, splitPos);
+
+                String chunkTextToAppend = this.keepSeparator
+                        ? chunkRaw.trim()
+                        : chunkRaw.replace(System.lineSeparator(), " ").trim();
+
+                if (chunkTextToAppend.length() > this.minChunkLengthToEmbed) {
+                    chunks.add(chunkTextToAppend);
+                }
+
+                // 从 tokens 中移除已消费的部分（以 token 数为准）
+                int consumed = this.getEncodedTokens(chunkRaw).size();
+                tokens = tokens.subList(consumed, tokens.size());
+                num_chunks++;
+                continue;
+            }
+
+            // 如果剩余文本中没有连续两个换行符，则退回到基于 chunkSize 的原始逻辑
+            List<Integer> window = tokens.subList(0, Math.min(chunkSize, tokens.size()));
+            String windowText = this.decodeTokens(window);
+
+            if (windowText.trim().isEmpty()) {
+                tokens = tokens.subList(window.size(), tokens.size());
+            } else {
+                int lastPunctuation = getLastPunctuation(windowText);
+                String chosen = windowText;
+                if (lastPunctuation != -1 && lastPunctuation > this.minChunkSizeChars) {
+                    chosen = windowText.substring(0, lastPunctuation + 1);
+                }
+
+                String chunkTextToAppend = this.keepSeparator
+                        ? chosen.trim()
+                        : chosen.replace(System.lineSeparator(), " ").trim();
+
+                if (chunkTextToAppend.length() > this.minChunkLengthToEmbed) {
+                    chunks.add(chunkTextToAppend);
+                }
+
+                tokens = tokens.subList(this.getEncodedTokens(chosen).size(), tokens.size());
+                num_chunks++;
+            }
+        }
+
+        if (!tokens.isEmpty()) {
+            String remaining_text = this.decodeTokens(tokens).replace(System.lineSeparator(), " ").trim();
+            if (remaining_text.length() > this.minChunkLengthToEmbed) {
+                chunks.add(remaining_text);
+            }
+        }
+
+        return chunks;
+    }
+
+
+    private static int getLastPunctuation(String chunkText) {
+        int lastDoubleNewline = chunkText.lastIndexOf("\n\n");
+        int lastPunctuation;
+        if (lastDoubleNewline != -1) {
+            // 两个换行符优先
+            lastPunctuation = lastDoubleNewline;
+        } else {
+            lastPunctuation = Math.max(chunkText.lastIndexOf('。'), // 英文句号和中文句号
+                    Math.max(
+                            Math.max(chunkText.lastIndexOf('?'), chunkText.lastIndexOf('？')), // 英文问号和中文问号
+                            Math.max(
+                                    Math.max(chunkText.lastIndexOf('!'), chunkText.lastIndexOf('！')), // 英文感叹号和中文感叹号
+                                    chunkText.lastIndexOf('\n') // 单个换行符
+                            )
+                    )
+            );
+        }
+        return lastPunctuation;
     }
 
     private List<Integer> getEncodedTokens(String text) {
