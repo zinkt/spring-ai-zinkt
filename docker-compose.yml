@@ -1,0 +1,58 @@
+version: "3.8"
+
+services:
+  db:
+    image: pgvector/pgvector:0.8.0-pg17-bookworm
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    env_file:
+      - .env
+    depends_on:
+      - db
+    ports:
+      - "8080:8080"   # 映射到宿主 8080，proxy 会把流量转给它
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./llm-vue
+      dockerfile: Dockerfile.frontend
+    depends_on:
+      - backend
+    # 不把前端直接映射到宿主端口，让 proxy 统一转发
+    restart: unless-stopped
+
+  ginkblog:
+    image: ginkblog:latest
+    container_name: ginkblog
+    ports:
+      - "8080:8080"
+    restart: always
+    volumes:
+      # 把宿主机的数据库目录挂载到容器
+      - ./ginkblog/storage:/app/ginkblog/storage
+
+  proxy:
+    image: nginx:stable-alpine
+    volumes:
+      - ./deploy/nginx-default.conf:/etc/nginx/conf.d/default.conf:ro
+      - /etc/nginx/ssl:/etc/nginx/ssl
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped

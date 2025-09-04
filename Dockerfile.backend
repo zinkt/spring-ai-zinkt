@@ -1,0 +1,24 @@
+# Dockerfile.backend
+# multi-stage: build with maven, run with temurin jre17
+FROM maven:3.9.0-eclipse-temurin-17 AS build
+WORKDIR /workspace
+
+# 先拷贝构建依赖，利用缓存
+COPY pom.xml mvnw ./
+COPY .mvn .mvn
+# 拷贝源码
+COPY src ./src
+
+# 使用 mvn 打包（跳过测试以加快构建，可按需移除 -DskipTests）
+RUN mvn -B -DskipTests package
+
+# 运行镜像
+FROM eclipse-temurin:17-jre
+WORKDIR /app
+# 将构建产物拷贝到最终镜像（适配 jar 名称通配）
+COPY --from=build /workspace/target/*.jar /app/app.jar
+
+# 可选：暴露容器端口（Spring Boot 默认 8080，可通过 env 覆盖）
+EXPOSE 8080
+
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
